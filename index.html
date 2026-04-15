@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sort or 'Splode!</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #070d1a;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: sans-serif;
+      user-select: none;
+    }
+    canvas {
+      display: block;
+      border-radius: 10px;
+      touch-action: none;
+    }
+  </style>
+</head>
+<body>
+<canvas id="gc"></canvas>
+<script>
+const cv = document.getElementById('gc');
+const ctx = cv.getContext('2d');
+const W = Math.min(600, window.innerWidth - 16);
+const H = Math.round(W * 0.72);
+cv.width = W; cv.height = H;
+cv.style.width = W + 'px'; cv.style.height = H + 'px';
+const ZW = Math.round(W * 0.22);
+const RX = W - ZW;
+const CX = W / 2;
+
+let gs = {
+  state: 'start', score: 0, lc: 0, rc: 0, banked: 0,
+  bombs: [], parts: [], time: 0, spawnT: 1, spawnI: 2.5,
+  maxT: 7, diff: 0, drag: null, shake: { x: 0, y: 0, t: 0 },
+  clearT: 0, clearSide: null, msg: '', dragOX: 0, dragOY: 0
+};
+let lastTS = null;
+
+function loop(ts) {
+  const dt = lastTS ? Math.min((ts - lastTS) / 1000, 0.05) : 0;
+  lastTS = ts;
+  update(dt);
+  render();
+  requestAnimationFrame(loop);
+}
+
+function update(dt) {
+  const g = gs;
+  for (let i = g.parts.length - 1; i >= 0; i--) {
+    const p = g.parts[i];
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    p.vy += 260 * dt; p.life -= dt;
+    if (p.life <= 0) g.parts.splice(i, 1);
+  }
+  if (g.shake.t > 0) {
+    g.shake.t -= dt;
+    g.shake.x = (Math.random() - .5) * 12;
+    g.shake.y = (Math.random() - .5) * 12;
+  } else { g.shake.x = 0; g.shake.y = 0; }
+
+  if (g.state === 'clearing') {
+    g.clearT -= dt;
+    if (g.clearT <= 0) { g.state = 'playing'; g.clearSide = null; }
+    return;
+  }
+  if (g.state !== 'playing') return;
+
+  g.time += dt;
+  const nd = Math.floor(g.time / 18);
+  if (nd > g.diff) {
+    g.diff = nd;
+    g.spawnI = Math.max(0.65, 2.5 - g.diff * 0.15);
+    g.maxT = Math.max(3, 7 - g.diff * 0.3);
+  }
+  g.spawnT -= dt;
+  if (g.spawnT <= 0) { spawnBomb(); g.spawnT = g.spawnI * (0.7 + Math.random() * 0.6); }
+  if (g.bombs.length === 0 && g.time > 1.5) { spawnBomb(); g.spawnT = g.spawnI; }
+
+  for (const b of g.bombs) {
+    if (b.dragging) { b.timeLeft -= dt * 0.25; }
+    else {
+      b.x += b.vx * dt; b.y += b.vy * dt;
+      if (b.x - b.r < ZW) { b.x = ZW + b.r; b.vx = Math.abs(b.vx) + 15; }
+      if (b.x + b.r > RX) { b.x = RX - b.r; b.vx = -(Math.abs(b.vx) + 15); }
+      if (b.y - b.r < 0) { b.y = b.r; b.vy = Math.abs(b.vy); }
+      if (b.y + b.r > H) { b.y = H - b.r; b.vy = -Math.abs(b.vy); }
+      b.vx *= 0.997; b.vy *= 0.997;
+      b.timeLeft -= dt;
+    }
+    if (b.timeLeft <= 0) {
+      explode(b.x, b.y, b.type);
+      gs.state = 'gameover';
+      gs.score = gs.banked + gs.lc + gs.rc;
+      gs.msg = '¡Un Bob-omb se quedó sin tiempo!';
+      return;
+    }
+  }
+}
+
+function spawnBomb() {
+  const type = Math.random() < 0.5 ? 'n' : 'b';
+  const r = 20, margin = r + 5;
+  const px = ZW + margin + Math.random() * (RX - ZW - 2 * margin);
+  const py = margin + Math.random() * (H - 2 * margin);
+  const ang = Math.random() * Math.PI * 2;
+  const sp = 30 + Math.random() * 60;
+  gs.bombs.push({ type, x: px, y: py, r, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, timeLeft: gs.maxT, maxT: gs.maxT, dragging: false });
+}
+
+function explode(x, y, type) {
+  gs.shake.t = 0.45;
+  for (let i = 0; i < 28; i++) {
+    const a = (i / 28) * Math.PI * 2 + Math.random() * 0.3;
+    const sp = 90 + Math.random() * 200;
+    gs.parts.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 80, life: 0.5 + Math.random() * 0.5, maxLife: 1, r: 3 + Math.random() * 6, color: type === 'n' ? '#94a3b8' : '#fca5a5' });
+  }
+  for (let i = 0; i < 10; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 30 + Math.random() * 80;
+    gs.parts.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 50, life: 0.6 + Math.random() * 0.4, maxLife: 1, r: 6 + Math.random() * 8, color: '#fbbf24' });
+  }
+}
+
+function poof(x, y) {
+  for (let i = 0; i < 10; i++) {
+    const a = (i / 10) * Math.PI * 2;
+    gs.parts.push({ x, y, vx: Math.cos(a) * 70, vy: Math.sin(a) * 70 - 20, life: 0.35, maxLife: 0.35, r: 3 + Math.random() * 4, color: '#4ade80' });
+  }
+}
+
+function placeBomb(b, side) {
+  const idx = gs.bombs.indexOf(b);
+  if (idx !== -1) gs.bombs.splice(idx, 1);
+  const correct = (side === 'L' && b.type === 'n') || (side === 'R' && b.type === 'b');
+  if (correct) {
+    poof(b.x, b.y);
+    if (side === 'L') { gs.lc++; if (gs.lc >= 40) { gs.banked += 40; gs.lc = 0; gs.state = 'clearing'; gs.clearT = 0.9; gs.clearSide = 'L'; } }
+    else { gs.rc++; if (gs.rc >= 40) { gs.banked += 40; gs.rc = 0; gs.state = 'clearing'; gs.clearT = 0.9; gs.clearSide = 'R'; } }
+  } else {
+    explode(b.x, b.y, b.type);
+    gs.score = gs.banked + (side === 'L' ? gs.rc : gs.lc);
+    gs.state = 'gameover';
+    gs.msg = '¡Sección equivocada! ¡Reacción en cadena!';
+  }
+}
+
+function render() {
+  ctx.clearRect(0, 0, W, H);
+  ctx.save();
+  ctx.translate(gs.shake.x, gs.shake.y);
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(-15, -15, W + 30, H + 30);
+  if (gs.state === 'start') { drawStart(); ctx.restore(); return; }
+  drawZone(0, 0, ZW, H, 'n', gs.lc, gs.clearSide === 'L');
+  drawZone(RX, 0, ZW, H, 'b', gs.rc, gs.clearSide === 'R');
+  ctx.fillStyle = '#0a1020';
+  ctx.fillRect(ZW, 0, RX - ZW, H);
+  ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+  ctx.lineWidth = 1;
+  for (let gx = ZW; gx < RX; gx += 32) { ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, H); ctx.stroke(); }
+  for (let gy = 0; gy < H; gy += 32) { ctx.beginPath(); ctx.moveTo(ZW, gy); ctx.lineTo(RX, gy); ctx.stroke(); }
+  ctx.fillStyle = 'rgba(15,23,42,0.85)';
+  ctx.fillRect(ZW, 0, RX - ZW, 40);
+  const liveScore = gs.state === 'gameover' ? gs.score : (gs.banked + gs.lc + gs.rc);
+  ctx.fillStyle = '#f1f5f9';
+  ctx.font = `bold ${Math.round(W * 0.044)}px monospace`;
+  ctx.textAlign = 'center';
+  ctx.fillText('SCORE: ' + liveScore, CX, 27);
+  ctx.fillStyle = 'rgba(148,163,184,0.25)';
+  ctx.font = `${Math.round(W * 0.055)}px sans-serif`;
+  ctx.fillText('◀', ZW + 22, H / 2 + 8);
+  ctx.fillText('▶', RX - 22, H / 2 + 8);
+  for (const p of gs.parts) {
+    ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
+    ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  for (const b of gs.bombs) if (!b.dragging) drawBomb(b);
+  for (const b of gs.bombs) if (b.dragging) drawBomb(b);
+  if (gs.state === 'clearing') drawClear();
+  if (gs.state === 'gameover') drawGameOver();
+  ctx.restore();
+}
+
+function drawZone(x, y, w, h, type, count, clearing) {
+  ctx.fillStyle = clearing ? (type === 'n' ? '#1e3a5f' : '#4a0a0a') : (type === 'n' ? '#0d1117' : '#190505');
+  ctx.fillRect(x, y, w, h);
+  if (clearing) { ctx.fillStyle = type === 'n' ? 'rgba(59,130,246,0.12)' : 'rgba(239,68,68,0.12)'; ctx.fillRect(x, y, w, h); }
+  ctx.strokeStyle = type === 'n' ? '#1e3a5f' : '#3b0a0a';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+  const cx2 = x + w / 2;
+  const spacing = 16, startX = cx2 - spacing / 2, startY = h / 2 - 55;
+  for (let i = 0; i < Math.min(count, 10); i++) {
+    const col = i % 2, row = Math.floor(i / 2);
+    ctx.beginPath(); ctx.arc(startX + col * spacing, startY + row * spacing, 5, 0, Math.PI * 2);
+    ctx.fillStyle = type === 'n' ? '#3b82f6' : '#ef4444'; ctx.fill();
+  }
+  ctx.fillStyle = '#f1f5f9';
+  ctx.font = `bold ${Math.round(w * 0.38)}px monospace`;
+  ctx.textAlign = 'center';
+  ctx.fillText(count, cx2, h / 2 + 58);
+  const bh = 7, bw = w - 16, bx2 = x + 8, by2 = h - 40;
+  ctx.fillStyle = '#1f2937'; ctx.fillRect(bx2, by2, bw, bh);
+  ctx.fillStyle = type === 'n' ? '#3b82f6' : '#ef4444';
+  ctx.fillRect(bx2, by2, bw * (Math.min(count, 40) / 40), bh);
+  ctx.strokeStyle = type === 'n' ? '#1e3a5f' : '#3b0a0a';
+  ctx.lineWidth = 1; ctx.strokeRect(bx2, by2, bw, bh);
+  ctx.fillStyle = '#64748b';
+  ctx.font = `${Math.round(w * 0.12)}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText(type === 'n' ? 'BOMB' : 'BUDDY', cx2, h - 18);
+  ctx.beginPath(); ctx.arc(cx2, y + 22, 9, 0, Math.PI * 2);
+  ctx.fillStyle = type === 'n' ? '#1e293b' : '#fecdd3'; ctx.fill();
+  ctx.strokeStyle = type === 'n' ? '#475569' : '#f43f5e'; ctx.lineWidth = 1.5; ctx.stroke();
+}
+
+function drawBomb(b) {
+  const { x, y, r, type, timeLeft, maxT } = b;
+  const pct = timeLeft / maxT;
+  ctx.beginPath(); ctx.arc(x, y, r + 8, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 3.5; ctx.stroke();
+  const tc = pct > 0.5 ? '#22c55e' : pct > 0.25 ? '#f59e0b' : '#ef4444';
+  ctx.beginPath(); ctx.arc(x, y, r + 8, -Math.PI / 2, -Math.PI / 2 + pct * Math.PI * 2);
+  ctx.strokeStyle = tc; ctx.lineWidth = 3.5; ctx.stroke();
+  if (pct < 0.3) {
+    const pulse = 0.4 + 0.4 * Math.sin(Date.now() / 90);
+    ctx.beginPath(); ctx.arc(x, y, r + 12 + pulse * 4, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(239,68,68,${pulse * 0.55})`; ctx.lineWidth = 2.5; ctx.stroke();
+  }
+  ctx.beginPath(); ctx.arc(x + 2, y + 3, r, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fill();
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = type === 'n' ? '#1e293b' : '#fecdd3'; ctx.fill();
+  ctx.strokeStyle = type === 'n' ? '#475569' : '#f43f5e'; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.beginPath(); ctx.arc(x - r * 0.28, y - r * 0.28, r * 0.32, 0, Math.PI * 2);
+  ctx.fillStyle = type === 'n' ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.4)'; ctx.fill();
+  const ew = r * 0.28;
+  ctx.fillStyle = 'white';
+  ctx.beginPath(); ctx.arc(x - r * 0.3, y - r * 0.08, ew, 0, Math.PI * 2);
+  ctx.arc(x + r * 0.3, y - r * 0.08, ew, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = type === 'n' ? '#0f172a' : '#881337';
+  ctx.beginPath(); ctx.arc(x - r * 0.26, y - r * 0.04, ew * 0.56, 0, Math.PI * 2);
+  ctx.arc(x + r * 0.34, y - r * 0.04, ew * 0.56, 0, Math.PI * 2); ctx.fill();
+  ctx.lineWidth = 1.5; ctx.lineCap = 'round';
+  if (type === 'b') {
+    ctx.beginPath(); ctx.arc(x, y + r * 0.33, r * 0.22, 0.15, Math.PI - 0.15);
+    ctx.strokeStyle = '#be185d'; ctx.stroke();
+  } else {
+    ctx.strokeStyle = '#334155';
+    ctx.beginPath();
+    ctx.moveTo(x - r * 0.5, y - r * 0.42); ctx.lineTo(x - r * 0.12, y - r * 0.32);
+    ctx.moveTo(x + r * 0.12, y - r * 0.32); ctx.lineTo(x + r * 0.5, y - r * 0.42);
+    ctx.moveTo(x - r * 0.2, y + r * 0.45); ctx.quadraticCurveTo(x, y + r * 0.32, x + r * 0.2, y + r * 0.45);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = type === 'n' ? '#64748b' : '#fb7185'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(x, y - r); ctx.lineTo(x, y - r - 9); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x - 5, y - r - 7); ctx.lineTo(x + 5, y - r - 7);
+  ctx.moveTo(x - 4, y - r - 10); ctx.lineTo(x + 4, y - r - 10); ctx.stroke();
+  ctx.strokeStyle = type === 'n' ? '#334155' : '#fda4af'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(x - r * 0.35, y + r * 0.8); ctx.lineTo(x - r * 0.5, y + r * 1.15); ctx.lineTo(x - r * 0.2, y + r * 1.15); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x + r * 0.35, y + r * 0.8); ctx.lineTo(x + r * 0.5, y + r * 1.15); ctx.lineTo(x + r * 0.2, y + r * 1.15); ctx.stroke();
+}
+
+function drawStart() {
+  ctx.fillStyle = '#f1f5f9';
+  ctx.font = `bold ${Math.round(W * 0.082)}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText("Sort or 'Splode!", CX, H * 0.22);
+  ctx.font = `${Math.round(W * 0.037)}px sans-serif`;
+  ctx.fillStyle = '#94a3b8';
+  ctx.fillText('¡Arrastra las bombas a la zona correcta!', CX, H * 0.35);
+  const eb1 = { type: 'n', x: CX - 70, y: H * 0.52, r: 22, timeLeft: 0.8, maxT: 1, dragging: false };
+  const eb2 = { type: 'b', x: CX + 70, y: H * 0.52, r: 22, timeLeft: 0.8, maxT: 1, dragging: false };
+  drawBomb(eb1); drawBomb(eb2);
+  ctx.fillStyle = '#475569'; ctx.font = `${Math.round(W * 0.033)}px sans-serif`;
+  ctx.fillText('Bomba normal', CX - 70, H * 0.52 + 36);
+  ctx.fillText('Bob-omb Buddy', CX + 70, H * 0.52 + 36);
+  ctx.fillStyle = '#334155'; ctx.font = `${Math.round(W * 0.032)}px sans-serif`;
+  ctx.fillText('◀ Zona negra          Zona roja ▶', CX, H * 0.68);
+  ctx.fillStyle = '#2563eb';
+  rrect(CX - 75, H * 0.77, 150, 44, 8); ctx.fill();
+  ctx.fillStyle = 'white'; ctx.font = `bold ${Math.round(W * 0.04)}px sans-serif`;
+  ctx.fillText('EMPEZAR', CX, H * 0.77 + 27);
+}
+
+function drawClear() {
+  const side = gs.clearSide;
+  const cx3 = side === 'L' ? ZW / 2 : RX + ZW / 2;
+  ctx.fillStyle = 'rgba(251,191,36,0.18)';
+  ctx.fillRect(side === 'L' ? 0 : RX, 0, ZW, H);
+  ctx.fillStyle = '#fbbf24';
+  ctx.font = `bold ${Math.round(ZW * 0.28)}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText('+40!', cx3, H / 2 + 8);
+}
+
+function drawGameOver() {
+  ctx.fillStyle = 'rgba(0,0,0,0.76)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#ef4444';
+  ctx.font = `bold ${Math.round(W * 0.072)}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText('GAME OVER', CX, H * 0.26);
+  ctx.fillStyle = '#fbbf24';
+  ctx.font = `${Math.round(W * 0.037)}px sans-serif`;
+  ctx.fillText(gs.msg, CX, H * 0.4);
+  ctx.fillStyle = '#f1f5f9';
+  ctx.font = `bold ${Math.round(W * 0.065)}px monospace`;
+  ctx.fillText('Score: ' + gs.score, CX, H * 0.54);
+  ctx.fillStyle = '#2563eb';
+  rrect(CX - 80, H * 0.65, 160, 44, 8); ctx.fill();
+  ctx.fillStyle = 'white';
+  ctx.font = `bold ${Math.round(W * 0.04)}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText('JUGAR DE NUEVO', CX, H * 0.65 + 27);
+}
+
+function rrect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+
+function reset() {
+  gs = { state: 'playing', score: 0, lc: 0, rc: 0, banked: 0, bombs: [], parts: [], time: 0, spawnT: 1.2, spawnI: 2.5, maxT: 7, diff: 0, drag: null, shake: { x: 0, y: 0, t: 0 }, clearT: 0, clearSide: null, msg: '', dragOX: 0, dragOY: 0 };
+}
+
+function getXY(e) {
+  const r = cv.getBoundingClientRect();
+  const sx = W / r.width, sy = H / r.height;
+  const src = e.touches ? e.touches[0] : e;
+  return { x: (src.clientX - r.left) * sx, y: (src.clientY - r.top) * sy };
+}
+
+cv.addEventListener('mousedown', onDown);
+cv.addEventListener('mousemove', onMove);
+cv.addEventListener('mouseup', onUp);
+cv.addEventListener('touchstart', onDown, { passive: false });
+cv.addEventListener('touchmove', onMove, { passive: false });
+cv.addEventListener('touchend', onUp, { passive: false });
+
+function onDown(e) {
+  e.preventDefault();
+  const { x, y } = getXY(e);
+  if (gs.state === 'start') { if (x > CX - 75 && x < CX + 75 && y > H * 0.77 && y < H * 0.77 + 44) reset(); return; }
+  if (gs.state === 'gameover') { if (x > CX - 80 && x < CX + 80 && y > H * 0.65 && y < H * 0.65 + 44) reset(); return; }
+  if (gs.state !== 'playing') return;
+  for (let i = gs.bombs.length - 1; i >= 0; i--) {
+    const b = gs.bombs[i];
+    const dx = x - b.x, dy = y - b.y;
+    if (dx * dx + dy * dy < (b.r + 12) * (b.r + 12)) {
+      gs.drag = b; b.dragging = true; gs.dragOX = dx; gs.dragOY = dy; break;
+    }
+  }
+}
+function onMove(e) {
+  e.preventDefault();
+  if (!gs.drag) return;
+  const { x, y } = getXY(e);
+  gs.drag.x = x - gs.dragOX; gs.drag.y = y - gs.dragOY;
+}
+function onUp(e) {
+  e.preventDefault();
+  const b = gs.drag;
+  if (!b) return;
+  b.dragging = false; gs.drag = null;
+  if (gs.state !== 'playing') return;
+  if (b.x < ZW) placeBomb(b, 'L');
+  else if (b.x > RX) placeBomb(b, 'R');
+}
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
